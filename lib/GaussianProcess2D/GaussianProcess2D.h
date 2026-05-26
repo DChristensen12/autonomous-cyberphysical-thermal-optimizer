@@ -7,7 +7,7 @@
 //      matrix is symmetric positive-definite by construction, so Cholesky is
 //      both faster and better conditioned. It's also a much nicer target for
 //      hand-written assembly later.
-//   2. The class owns all its storage — no dynamic allocation anywhere.
+//   2. The class owns all its storage, no dynamic allocation anywhere.
 //      MAX_N is a template parameter.
 
 #ifndef GAUSSIAN_PROCESS_2D_H
@@ -19,9 +19,15 @@
 template <int MAX_N>
 class GaussianProcess2D {
 public:
-    GaussianProcess2D(float sigma_f, float length_scale, float noise_var)
+    // Two length scales, one per input axis. Kp and Kd live on very different
+    // scales (Kp ranges over ~20, Kd over ~5), so a single shared length scale
+    // would make the kernel treat almost every sample as uncorrelated with its
+    // neighbors. Sizing each length scale to its own axis fixes that.
+    GaussianProcess2D(float sigma_f, float length_scale_kp, float length_scale_kd,
+                      float noise_var)
         : sigma_f_sq_(sigma_f * sigma_f),
-          inv_two_l_sq_(1.0f / (2.0f * length_scale * length_scale)),
+          inv_two_l_kp_sq_(1.0f / (2.0f * length_scale_kp * length_scale_kp)),
+          inv_two_l_kd_sq_(1.0f / (2.0f * length_scale_kd * length_scale_kd)),
           noise_var_(noise_var),
           n_(0),
           posterior_stale_(true)
@@ -42,7 +48,7 @@ public:
 
     // Refactor the kernel matrix and resolve for alpha. Call this after any
     // add_sample() and before any predict(). If it returns false the matrix
-    // wasn't SPD — usually the fix is more noise jitter.
+    // wasn't SPD, usually the fix is more noise jitter.
     bool update_posterior() {
         L_.resize(n_, n_);
         for (int i = 0; i < n_; ++i) {
@@ -74,7 +80,7 @@ public:
             return;
         }
 
-        // k_*  — kernel vector between the query and every training point.
+        // k_*, kernel vector between the query and every training point.
         float k_star[MAX_N];
         for (int i = 0; i < n_; ++i) {
             k_star[i] = rbf_kernel(kp_query, kd_query, X_(i, 0), X_(i, 1));
@@ -105,12 +111,14 @@ private:
     inline float rbf_kernel(float kp1, float kd1, float kp2, float kd2) const {
         const float d_kp = kp1 - kp2;
         const float d_kd = kd1 - kd2;
-        const float dist_sq = d_kp * d_kp + d_kd * d_kd;
-        return sigma_f_sq_ * expf(-dist_sq * inv_two_l_sq_);
+        const float exponent = d_kp * d_kp * inv_two_l_kp_sq_
+                             + d_kd * d_kd * inv_two_l_kd_sq_;
+        return sigma_f_sq_ * expf(-exponent);
     }
 
     const float sigma_f_sq_;
-    const float inv_two_l_sq_;
+    const float inv_two_l_kp_sq_;
+    const float inv_two_l_kd_sq_;
     const float noise_var_;
 
     Matrix2D<MAX_N, 2>    X_;       // training inputs, one row per sample

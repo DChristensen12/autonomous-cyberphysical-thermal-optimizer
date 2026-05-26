@@ -34,16 +34,19 @@ namespace control {
 
 namespace gp {
     // Kernel matrix is N x N so this caps memory at ~32*32*4 = 4 KB plus
-    // change. Compute is the bigger worry — Cholesky is N^3. 32 felt like
+    // change. Compute is the bigger worry, Cholesky is N^3. 32 felt like
     // a reasonable upper bound before I'd want to start thinking about
     // sparse approximations.
     constexpr int MAX_SAMPLES = 32;
 
-    // RBF kernel hyperparameters. Length scale is the one I expect to retune
-    // once I see what the actual performance landscape looks like.
-    constexpr float SIGMA_F      = 1.0f;
-    constexpr float LENGTH_SCALE = 0.5f;
-    constexpr float NOISE_VAR    = 1e-3f;  // also doubles as Cholesky jitter
+    // RBF kernel hyperparameters. One length scale per gain axis, each set to
+    // roughly a quarter of its axis range so nearby gains stay correlated but
+    // the far corners don't. I expect to retune these once I see the real
+    // performance landscape.
+    constexpr float SIGMA_F         = 1.0f;
+    constexpr float LENGTH_SCALE_KP = 4.0f;
+    constexpr float LENGTH_SCALE_KD = 1.0f;
+    constexpr float NOISE_VAR       = 1e-3f;  // also doubles as Cholesky jitter
 
     // UCB exploration weight. Crank this up if the optimizer gets stuck
     // exploiting a local optimum.
@@ -55,7 +58,7 @@ namespace gp {
 }
 
 namespace gains {
-    // The box the GP is allowed to search in. These bounds are a guess —
+    // The box the GP is allowed to search in. These bounds are a guess, 
     // I'll widen or narrow them after the first few trials.
     constexpr float KP_MIN = 0.5f;
     constexpr float KP_MAX = 20.0f;

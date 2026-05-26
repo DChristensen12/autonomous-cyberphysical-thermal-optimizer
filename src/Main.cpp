@@ -12,11 +12,13 @@
 #include "acpto_config.h"
 #include "Matrix2D.h"
 #include "GaussianProcess2D.h"
+#include "Acquisition.h"
 #include "ThermalPlant.h"
 
 static ThermalPlant                        g_plant;
 static GaussianProcess2D<gp::MAX_SAMPLES>  g_gp(gp::SIGMA_F,
-                                                gp::LENGTH_SCALE,
+                                                gp::LENGTH_SCALE_KP,
+                                                gp::LENGTH_SCALE_KD,
                                                 gp::NOISE_VAR);
 static IntervalTimer g_pid_timer;
 
@@ -34,24 +36,17 @@ void pid_isr() {
     g_tick_count++;
 }
 
-struct AcqResult { float kp; float kd; float ucb; };
-
-// Brute-force grid search over the gain box. Could be smarter (gradient
-// ascent on the GP mean + variance) but 441 evals on a 600 MHz M7 is nothing.
+// Acquisition lives in Acquisition.h now so the laptop sim and this firmware
+// run the identical search. This wrapper just feeds it the gain box.
+// Heads up: sim/sim_main.cpp scores a step-response with an overshoot
+// penalty, while the run_trial below scores plain mean-abs-error at a fixed
+// setpoint. Unify those before trusting hardware numbers against the sim.
 AcqResult find_next_query() {
-    AcqResult best = { gains::KP_MIN, gains::KD_MIN, -1e30f };
-    const float dkp = (gains::KP_MAX - gains::KP_MIN) / (gp::ACQ_GRID_N - 1);
-    const float dkd = (gains::KD_MAX - gains::KD_MIN) / (gp::ACQ_GRID_N - 1);
-
-    for (int i = 0; i < gp::ACQ_GRID_N; ++i) {
-        const float kp = gains::KP_MIN + i * dkp;
-        for (int j = 0; j < gp::ACQ_GRID_N; ++j) {
-            const float kd = gains::KD_MIN + j * dkd;
-            const float u  = g_gp.ucb(kp, kd, gp::UCB_KAPPA);
-            if (u > best.ucb) { best.kp = kp; best.kd = kd; best.ucb = u; }
-        }
-    }
-    return best;
+    return argmax_ucb<gp::MAX_SAMPLES>(
+        g_gp,
+        gains::KP_MIN, gains::KP_MAX,
+        gains::KD_MIN, gains::KD_MAX,
+        gp::ACQ_GRID_N, gp::UCB_KAPPA);
 }
 
 // Hold these gains for `window_ms`, then report mean absolute tracking error.
@@ -112,7 +107,7 @@ void setup() {
     }
 
     if (!g_gp.update_posterior()) {
-        Serial.println(F("# posterior update FAILED — try a bigger noise_var"));
+        Serial.println(F("# posterior update FAILED, try a bigger noise_var"));
     }
 }
 
@@ -126,7 +121,7 @@ void loop() {
         while (true) delay(1000);
     }
     if (!g_gp.update_posterior()) {
-        Serial.println(F("# posterior update FAILED — try a bigger noise_var"));
+        Serial.println(F("# posterior update FAILED, try a bigger noise_var"));
     }
 
     Serial.print(iter++);          Serial.print(',');

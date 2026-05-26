@@ -13,13 +13,8 @@ namespace {
 }
 
 ThermalPlant::ThermalPlant()
-    : kp_(0.0f),
-      kd_(0.0f),
-      setpoint_c_(control::SETPOINT_C),
-      last_temp_c_(25.0f),   // reasonable room-temp default until first read
-      last_error_c_(0.0f),
-      prev_error_c_(0.0f),
-      first_tick_(true)
+    : pid_(control::SETPOINT_C),
+      last_temp_c_(25.0f)   // reasonable room-temp default until first read
 {}
 
 void ThermalPlant::begin() {
@@ -30,7 +25,7 @@ void ThermalPlant::begin() {
     analogWriteResolution(control::PWM_RESOLUTION_BITS);
 
     sensors.begin();
-    sensors.setWaitForConversion(false);  // async — we'll check back later
+    sensors.setWaitForConversion(false);  // async, we'll check back later
     sensors.setResolution(10);             // 10-bit ~= 187 ms conversions
 
     drive_actuators(0.0f);
@@ -59,9 +54,7 @@ float ThermalPlant::read_temperature_c() {
 }
 
 void ThermalPlant::set_gains(float kp, float kd) {
-    kp_ = kp;
-    kd_ = kd;
-    first_tick_ = true;  // wipe derivative history so the gains don't kick
+    pid_.set_gains(kp, kd);
 }
 
 void ThermalPlant::pid_tick(float dt_s) {
@@ -73,17 +66,7 @@ void ThermalPlant::pid_tick(float dt_s) {
         return;
     }
 
-    const float error = setpoint_c_ - t;
-    last_error_c_ = error;
-
-    float derivative = 0.0f;
-    if (!first_tick_ && dt_s > 1e-6f) {
-        derivative = (error - prev_error_c_) / dt_s;
-    }
-    first_tick_ = false;
-    prev_error_c_ = error;
-
-    drive_actuators(kp_ * error + kd_ * derivative);
+    drive_actuators(pid_.compute(t, dt_s));
 }
 
 void ThermalPlant::drive_actuators(float control_signal) {
