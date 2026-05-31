@@ -76,7 +76,7 @@ void setup() {
     Serial.begin(115200);
     while (!Serial && millis() < 3000) {}  // give the USB host a moment
 
-    Serial.println(F("# ACPTO " ACPTO_VERSION " booting"));
+    Serial.println(F("# ACPTO booting"));
     g_plant.begin();
 
     // Seed the GP with a few corners + center so the posterior has something

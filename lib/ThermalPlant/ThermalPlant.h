@@ -1,24 +1,23 @@
-// Wraps the physical side of the project: read the DS18B20, drive the heater
-// and fan, run a PID step. Deliberately no integral term — the GP is tuning
-// Kp and Kd only and an extra I term would just confuse the performance score.
+// Wraps the physical side of the project: read the thermistor, drive the
+// heater and fan, run a PID step. The PID math itself lives in PIDController
+// so the hardware and the laptop simulation run the identical controller.
 
 #ifndef THERMAL_PLANT_H
 #define THERMAL_PLANT_H
 
 #include <Arduino.h>
 #include "acpto_config.h"
+#include "PIDController.h"
 
 class ThermalPlant {
 public:
     ThermalPlant();
 
-    // Pin setup, PWM resolution, sensor bus. Call from setup().
+    // Pin setup, PWM resolution, ADC resolution. Call from setup().
     void begin();
 
-    // The DS18B20 takes ~200 ms to do a 10-bit conversion. Calling
-    // request_temperature_async() at the top of a tick and read_temperature_c()
-    // a tick or two later avoids ever blocking.
-    void  request_temperature_async();
+    // Read the divider and return the block temperature in Celsius. Averages
+    // a handful of ADC samples internally to settle the noise.
     float read_temperature_c();
 
     // The optimizer pokes new gains in here between trials.
@@ -32,19 +31,15 @@ public:
 
     // For logging.
     float last_temperature() const { return last_temp_c_; }
-    float last_error()       const { return last_error_c_; }
+    float last_error()       const { return pid_.last_error(); }
 
 private:
-    // Positive control -> heater. Negative -> fan. Magnitude is duty cycle.
+    // Positive control runs the heater, negative runs the fan. Magnitude is
+    // duty cycle.
     void drive_actuators(float control_signal);
 
-    float kp_;
-    float kd_;
-    float setpoint_c_;
+    PIDController pid_;
     float last_temp_c_;
-    float last_error_c_;
-    float prev_error_c_;
-    bool  first_tick_;   // skip the derivative on the very first step
 };
 
 #endif

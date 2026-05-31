@@ -1,20 +1,9 @@
 #include "ThermalPlant.h"
-#include <OneWire.h>
-#include <DallasTemperature.h>
-
-// Kept these at file scope rather than as members so the OneWire and
-// DallasTemperature includes don't leak into the header. The rest of the
-// project doesn't need to know which sensor library I'm using.
-namespace {
-    OneWire           one_wire(pins::DS18B20_DATA);
-    DallasTemperature sensors(&one_wire);
-    bool              conversion_pending = false;
-    uint32_t          conversion_request_us = 0;
-}
+#include <math.h>
 
 ThermalPlant::ThermalPlant()
     : pid_(control::SETPOINT_C),
-      last_temp_c_(25.0f)   // reasonable room-temp default until first read
+      last_temp_c_(25.0f)   // sane room temp default until the first real read
 {}
 
 void ThermalPlant::begin() {
@@ -23,34 +12,45 @@ void ThermalPlant::begin() {
     pinMode(pins::STATUS_LED, OUTPUT);
 
     analogWriteResolution(control::PWM_RESOLUTION_BITS);
-
-    sensors.begin();
-    sensors.setWaitForConversion(false);  // async, we'll check back later
-    sensors.setResolution(10);             // 10-bit ~= 187 ms conversions
+    analogReadResolution(thermistor::ADC_BITS);
 
     drive_actuators(0.0f);
 }
 
-void ThermalPlant::request_temperature_async() {
-    if (!conversion_pending) {
-        sensors.requestTemperatures();
-        conversion_request_us = micros();
-        conversion_pending = true;
-    }
-}
-
+// Read the divider, average a handful of samples to settle the noise, and
+// convert to Celsius with the Beta equation. The ADC noise on a bare divider
+// is real, so the oversampling earns its keep here.
 float ThermalPlant::read_temperature_c() {
-    if (conversion_pending) {
-        const uint32_t elapsed = micros() - conversion_request_us;
-        if (elapsed > 200000) {  // 200 ms is generous for a 10-bit read
-            const float t = sensors.getTempCByIndex(0);
-            // The DallasTemperature library returns -127 on failure.
-            // Bracket the sane range and ignore garbage.
-            if (t > -100.0f && t < 200.0f) last_temp_c_ = t;
-            conversion_pending = false;
-        }
+    uint32_t acc = 0;
+    for (int i = 0; i < thermistor::ADC_OVERSAMPLE; ++i) {
+        acc += analogRead(pins::THERMISTOR_ADC);
     }
-    return last_temp_c_;
+    const float counts = (float)acc / (float)thermistor::ADC_OVERSAMPLE;
+
+    // Guard the ends so we never divide by zero if a wire falls out and the
+    // reading pins to a rail.
+    if (counts <= 1.0f || counts >= (float)thermistor::ADC_MAX - 1.0f) {
+        return last_temp_c_;  // keep the last good value rather than spike
+    }
+
+    // Tap voltage as a fraction of full scale. With the thermistor on top and
+    // the fixed resistor on the bottom, the tap fraction is the bottom
+    // resistor over the total, so we can back out the thermistor resistance.
+    const float frac = counts / (float)thermistor::ADC_MAX;
+
+    // frac = Rfixed / (Rtherm + Rfixed)  ->  Rtherm = Rfixed * (1/frac - 1)
+    const float r_therm = thermistor::SERIES_RESISTOR * (1.0f / frac - 1.0f);
+
+    // Beta equation, solved for temperature in Kelvin:
+    //   1/T = 1/T0 + (1/Beta) * ln(R/R0)
+    const float t0_k = thermistor::NOMINAL_TEMP_C + 273.15f;
+    float inv_t = 1.0f / t0_k
+                + (1.0f / thermistor::BETA)
+                  * logf(r_therm / thermistor::NOMINAL_RES);
+    const float temp_c = (1.0f / inv_t) - 273.15f;
+
+    last_temp_c_ = temp_c;
+    return temp_c;
 }
 
 void ThermalPlant::set_gains(float kp, float kd) {
@@ -58,7 +58,6 @@ void ThermalPlant::set_gains(float kp, float kd) {
 }
 
 void ThermalPlant::pid_tick(float dt_s) {
-    request_temperature_async();
     const float t = read_temperature_c();
 
     if (t > control::SAFETY_MAX_C) {
@@ -69,15 +68,22 @@ void ThermalPlant::pid_tick(float dt_s) {
     drive_actuators(pid_.compute(t, dt_s));
 }
 
+// Positive control runs the heater, negative runs the fan. The fan side is
+// clamped to FAN_MAX_DUTY because it is a 5V fan sitting on the 9V rail.
 void ThermalPlant::drive_actuators(float control_signal) {
-    // Clamp into [-1, 1] and split into heater/fan duty.
     if (control_signal >  1.0f) control_signal =  1.0f;
     if (control_signal < -1.0f) control_signal = -1.0f;
 
     int heater_pwm = 0;
     int fan_pwm    = 0;
-    if (control_signal > 0.0f) heater_pwm = (int)( control_signal * control::PWM_MAX);
-    else                       fan_pwm    = (int)(-control_signal * control::PWM_MAX);
+
+    if (control_signal > 0.0f) {
+        heater_pwm = (int)(control_signal * control::PWM_MAX);
+    } else {
+        float fan_duty = -control_signal;
+        if (fan_duty > control::FAN_MAX_DUTY) fan_duty = control::FAN_MAX_DUTY;
+        fan_pwm = (int)(fan_duty * control::PWM_MAX);
+    }
 
     analogWrite(pins::HEATER_PWM, heater_pwm);
     analogWrite(pins::FAN_PWM,    fan_pwm);
