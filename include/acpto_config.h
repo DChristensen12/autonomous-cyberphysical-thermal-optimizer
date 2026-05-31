@@ -8,7 +8,15 @@ namespace pins {
     // Steering clear of 0/1 (USB serial) and 13 (onboard LED).
 constexpr int HEATER_PWM     = 2;
 constexpr int FAN_PWM        = 3;
-constexpr int THERMISTOR_ADC = A0;   // divider midpoint, Teensy pin 14
+// A0 is an Arduino framework name, so it only exists on the Teensy build.
+    // The laptop sim compiles with plain g++ and has no Arduino headers, so we
+    // fall back to a plain number there. The sim never reads a real pin anyway,
+    // it drives off the physics model, so the value is just a placeholder for it.
+#ifdef ARDUINO
+    constexpr int THERMISTOR_ADC = A0;   // divider midpoint, Teensy pin 14
+#else
+    constexpr int THERMISTOR_ADC = 14;   // placeholder for the native sim
+#endif
 constexpr int STATUS_LED     = 13;
 }
 namespace control {

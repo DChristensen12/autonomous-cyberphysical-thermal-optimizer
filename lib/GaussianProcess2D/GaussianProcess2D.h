@@ -81,7 +81,7 @@ public:
         }
 
         // k_*, kernel vector between the query and every training point.
-        float k_star[MAX_N];
+        float k_star[MAX_N] = {0.0f};
         for (int i = 0; i < n_; ++i) {
             k_star[i] = rbf_kernel(kp_query, kd_query, X_(i, 0), X_(i, 1));
         }
