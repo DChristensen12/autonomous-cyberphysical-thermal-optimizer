@@ -6,17 +6,14 @@
 namespace pins {
     // Teensy 4.0 PWM pins: 0-9, 14, 15, 18, 19, 22-25, 28, 29, 33, 36, 37.
     // Steering clear of 0/1 (USB serial) and 13 (onboard LED).
+    // Pin 2 drives the heater. It used to run the L293D enable, now it drives
+    // an IRLZ44N MOSFET gate instead. Same PWM signal either way, the MOSFET
+    // just wastes far less power than the L293D did.
+    // Pin 3 still runs the fan through the L293D, which is fine since the fan
+    // draws little current and the chip stays cool driving it.
 constexpr int HEATER_PWM     = 2;
 constexpr int FAN_PWM        = 3;
-// A0 is an Arduino framework name, so it only exists on the Teensy build.
-    // The laptop sim compiles with plain g++ and has no Arduino headers, so we
-    // fall back to a plain number there. The sim never reads a real pin anyway,
-    // it drives off the physics model, so the value is just a placeholder for it.
-#ifdef ARDUINO
-    constexpr int THERMISTOR_ADC = A0;   // divider midpoint, Teensy pin 14
-#else
-    constexpr int THERMISTOR_ADC = 14;   // placeholder for the native sim
-#endif
+constexpr int THERMISTOR_ADC = A0;   // divider midpoint, Teensy pin 14
 constexpr int STATUS_LED     = 13;
 }
 namespace control {
@@ -29,6 +26,8 @@ constexpr float SETPOINT_C = 45.0f;
 constexpr int PWM_RESOLUTION_BITS = 12;
 constexpr int PWM_MAX = (1 << PWM_RESOLUTION_BITS) - 1;
     // If we ever see this temperature something is very wrong. Kill the heater.
+    // Worth watching now that the MOSFET lets the heater run at full strength,
+    // the block heats a lot faster than it did through the lossy L293D.
 constexpr float SAFETY_MAX_C = 75.0f;
     // The fan is a 5V part but it hangs off the 9V motor rail through the
     // L293D. Never let its duty go past this or the fan cooks. 5 over 9 is
@@ -64,21 +63,22 @@ constexpr float KP_MAX = 20.0f;
 constexpr float KD_MIN = 0.0f;
 constexpr float KD_MAX = 5.0f;
 }
-// NTC thermistor and its divider. Our wiring is 3.3V into the thermistor on
-// top, down to the A0 tap, then the fixed 10k from the tap down to ground.
-// So when the block heats up the thermistor resistance falls, which pulls
-// MORE of the 3.3V across the bottom resistor, so the tap voltage rises with
-// temperature. The math below assumes exactly that arrangement, so if you
-// ever flip the divider you have to revisit it.
+// NTC thermistor and its divider. Wiring is 3.3V into the thermistor on top,
+// down to the A0 tap, then the fixed 10k from the tap down to ground. When the
+// block heats up the thermistor resistance falls, which pulls more of the 3.3V
+// across the bottom resistor, so the tap voltage rises with temperature. The
+// math below assumes exactly that arrangement, so if I ever flip the divider
+// I'll have to revisit it.
 //
-// The Beta model is the simple two number fit for an NTC. Not as precise as
-// full Steinhart Hart but more than good enough to hold a setpoint, and it
-// needs just the one beta constant off the datasheet.
+// This is now a stainless probe on a cable rather than a bare bead, but it is
+// the same 10k nominal, 3950 beta part, so none of these numbers change. If a
+// new probe ever reads a few degrees off at room temperature, check its real
+// beta against the datasheet and update BETA, that is the usual culprit.
 namespace thermistor {
 constexpr float SERIES_RESISTOR = 10000.0f;  // the fixed 10k, on the bottom
 constexpr float NOMINAL_RES     = 10000.0f;  // thermistor resistance at 25 C
 constexpr float NOMINAL_TEMP_C  = 25.0f;     // temperature that rating is at
-constexpr float BETA            = 3950.0f;   // beta, typical for these 10k beads
+constexpr float BETA            = 3950.0f;   // beta, matches the 10k 3950 probe
 constexpr int   ADC_BITS        = 12;        // we read at 12 bit resolution
 constexpr int   ADC_MAX         = (1 << ADC_BITS) - 1;
 constexpr int   ADC_OVERSAMPLE  = 16;        // average this many reads per sample
